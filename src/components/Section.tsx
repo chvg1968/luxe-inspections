@@ -103,24 +103,31 @@ const Section: React.FC<SectionProps> = ({
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className="border border-dashed border-gray-300 rounded-md p-2 mb-4 bg-gray-50"
+            className="border-2 border-dashed border-blue-300 rounded-md p-3 mb-4 bg-blue-50 transition-all hover:bg-blue-100 hover:border-blue-400"
           >
             <div className="p-2 text-center">
-              <h4 className="text-sm font-medium text-gray-700 mb-1">Área para fotos</h4>
-              <p className="text-xs text-gray-500">Arrastra fotos desde la galería</p>
+              <h4 className="text-sm font-medium text-blue-700 mb-1">Área para fotos</h4>
+              <p className="text-xs text-blue-600">Arrastra fotos desde la galería</p>
               
               {section.photos.length > 0 && (
-                <div className="grid grid-cols-4 gap-2 mt-2">
+                <div className="grid grid-cols-3 gap-3 mt-3">
                   {section.photos.map(photo => (
-                    <div key={photo.id} className="relative group">
-                      <img 
-                        src={photo.url} 
-                        alt={photo.caption} 
-                        className="w-full h-16 object-cover rounded-md"
-                      />
+                    <div key={photo.id} className="relative group bg-white p-2 shadow-sm rounded-md">
+                      <div className="aspect-w-4 aspect-h-3 overflow-hidden rounded-md">
+                        <img 
+                          src={photo.url} 
+                          alt={photo.caption} 
+                          className="w-full h-full object-contain"
+                          onError={(e) => {
+                            // Mostrar imagen de error si la carga falla
+                            e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48cGF0aCBkPSJNMzUgNjVMNTAgNDVMNjUgNjVIMzVaIiBzdHJva2U9IiM5OTkiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjYwIiBjeT0iNDAiIHI9IjUiIGZpbGw9IiM5OTkiLz48L3N2Zz4=';
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs p-1 truncate text-center mt-1">{photo.caption || 'Sin título'}</p>
                       <button
                         onClick={() => onRemovePhoto(section.id, photo.id)}
-                        className="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
                         title="Eliminar foto"
                       >
                         <Trash2 size={12} />

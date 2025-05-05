@@ -1,27 +1,36 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { PhotoItem } from '../types';
 import './PhotoGallery.css';
-import { Loader2, Image as ImageIcon, RefreshCw, Plus } from 'lucide-react';
+import { Loader2, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { loadSequentialPhotos } from '../lib/supabase';
+import { Droppable, Draggable } from '@hello-pangea/dnd';
 
 interface PhotoGalleryProps {
   villaName: string;
   photos?: PhotoItem[];
-  onAddPhotoToSection?: (photoId: string, sectionId: string) => void;
-  sections?: { id: string; title: string }[];
 }
 
 const PhotoGallery: React.FC<PhotoGalleryProps> = ({ 
   villaName, 
-  photos: propPhotos, 
-  onAddPhotoToSection, 
-  sections = [] 
+  photos: propPhotos
 }) => {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
 
+  // Función para manejar errores de carga de imágenes
+  const handleImageError = useCallback((event: React.SyntheticEvent<HTMLImageElement, Event>, photoId: string) => {
+    console.log(`Imagen rota: ${photoId}`);
+    // Usar una imagen placeholder en lugar de filtrar la imagen
+    event.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48cGF0aCBkPSJNMzUgNjVMNTAgNDVMNjUgNjVIMzVaIiBzdHJva2U9IiM5OTkiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjYwIiBjeT0iNDAiIHI9IjUiIGZpbGw9IiM5OTkiLz48L3N2Zz4=';
+  }, []);
+  
+  // Función para manejar carga exitosa de imágenes
+  const handleImageLoad = useCallback((photo: PhotoItem) => {
+    console.log(`Imagen cargada correctamente: ${photo.id}`);
+    // Ya no necesitamos mantener un registro de fotos válidas
+  }, []);
+  
   const loadPhotos = useCallback(async () => {
     // Si tenemos fotos como prop, las usamos directamente
     if (propPhotos && propPhotos.length > 0) {
@@ -29,8 +38,8 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
       
       // Ordenar fotos por nombre si tienen un patrón numérico
       const sortedPhotos = [...propPhotos].sort((a, b) => {
-        const numA = a.caption?.match(/\\d+/);
-        const numB = b.caption?.match(/\\d+/);
+        const numA = a.caption?.match(/\d+/);
+        const numB = b.caption?.match(/\d+/);
         
         if (numA && numB) {
           return parseInt(numA[0]) - parseInt(numB[0]);
@@ -39,6 +48,7 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
         return (a.caption || '').localeCompare(b.caption || '');
       });
       
+      // Ya no necesitamos reiniciar fotos válidas
       setPhotos(sortedPhotos);
       setIsLoading(false);
       return;
@@ -55,8 +65,8 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
       // Ordenar fotos por nombre si tienen un patrón numérico (ej: "Foto 1", "Foto 2", etc.)
       const sortedPhotos = [...loadedPhotos].sort((a, b) => {
         // Extraer números de los captions si es posible
-        const numA = a.caption?.match(/\\d+/);
-        const numB = b.caption?.match(/\\d+/);
+        const numA = a.caption?.match(/\d+/);
+        const numB = b.caption?.match(/\d+/);
         
         if (numA && numB) {
           return parseInt(numA[0]) - parseInt(numB[0]);
@@ -66,6 +76,7 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
         return (a.caption || '').localeCompare(b.caption || '');
       });
       
+      // Ya no necesitamos reiniciar fotos válidas
       setPhotos(sortedPhotos);
     } catch (err) {
       console.error('Error cargando fotos:', err);
@@ -79,18 +90,8 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
     loadPhotos();
   }, [villaName, propPhotos, loadPhotos]);
 
-  // Función para manejar el clic en una foto
-  const handlePhotoClick = (photoId: string) => {
-    setSelectedPhotoId(selectedPhotoId === photoId ? null : photoId);
-  };
-
-  // Función para añadir una foto a una sección
-  const handleAddToSection = (photoId: string, sectionId: string) => {
-    if (onAddPhotoToSection) {
-      onAddPhotoToSection(photoId, sectionId);
-      setSelectedPhotoId(null);
-    }
-  };
+  // Mostrar todas las fotos
+  const displayPhotos = photos;
 
   if (isLoading) {
     return (
@@ -131,54 +132,64 @@ const PhotoGallery: React.FC<PhotoGalleryProps> = ({
   return (
     <div className="photo-gallery mb-4">
       <h3 className="text-lg font-medium text-gray-800 mb-2">Galería de Fotos</h3>
-      <div className="grid grid-cols-2 gap-2">
-        {photos.map((photo, index) => (
+      
+      <Droppable droppableId="photo-gallery" type="photo" direction="horizontal" isDropDisabled={true}>
+        {(provided) => (
           <div 
-            key={photo.id} 
-            className="relative bg-white rounded-md overflow-hidden shadow-sm"
+            ref={provided.innerRef}
+            {...provided.droppableProps}
+            className="grid grid-cols-2 gap-2"
           >
-            <div className="relative">
-              <img 
-                src={photo.url} 
-                alt={photo.caption || `Foto ${index + 1}`} 
-                className="w-full h-24 object-cover"
-                onError={(e) => {
-                  // Mostrar imagen de error si la carga falla
-                  e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48cGF0aCBkPSJNMzUgNjVMNTAgNDVMNjUgNjVIMzVaIiBzdHJva2U9IiM5OTkiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjYwIiBjeT0iNDAiIHI9IjUiIGZpbGw9IiM5OTkiLz48L3N2Zz4=';
-                }}
-              />
-              
-              {/* Botón para mostrar/ocultar opciones */}
-              {onAddPhotoToSection && sections.length > 0 && (
-                <button 
-                  onClick={() => handlePhotoClick(photo.id)}
-                  className="absolute top-1 right-1 bg-white bg-opacity-70 rounded-full p-1 hover:bg-opacity-100 transition-all"
-                  title="Añadir a sección"
-                >
-                  <Plus size={16} className="text-blue-600" />
-                </button>
-              )}
-              
-              {/* Menú de secciones */}
-              {selectedPhotoId === photo.id && sections.length > 0 && (
-                <div className="absolute top-8 right-1 bg-white shadow-md rounded-md p-1 z-10 w-36">
-                  <p className="text-xs font-medium text-gray-500 p-1">Añadir a sección:</p>
-                  {sections.map(section => (
-                    <button
-                      key={section.id}
-                      onClick={() => handleAddToSection(photo.id, section.id)}
-                      className="w-full text-left text-xs py-1 px-2 hover:bg-blue-50 rounded transition-colors truncate"
-                    >
-                      {section.title}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <p className="text-xs p-2 truncate">{photo.caption || `Foto ${index + 1}`}</p>
+            {displayPhotos.map((photo, index) => (
+              <Draggable 
+                key={photo.id} 
+                draggableId={photo.id} 
+                index={index}
+              >
+                {(provided, snapshot) => (
+                  <div
+                    ref={provided.innerRef}
+                    {...provided.draggableProps}
+                    {...provided.dragHandleProps}
+                    className={`draggable-photo draggable-photo-style ${
+                      snapshot.isDragging ? 'is-dragging' : ''
+                    } draggable-transform`}
+                    // Usamos un atributo data para almacenar la transformación
+                    data-x={provided.draggableProps.style?.transform}
+                    // El estilo se aplicará mediante CSS y JavaScript
+                  >
+                    <div className="relative photo-gallery__image-container">
+                      <div className="photo-gallery__image-wrapper">
+                        <img 
+                          src={photo.url} 
+                          alt={photo.caption || `Foto ${index + 1}`} 
+                          className="photo-gallery__image"
+                          onError={(e) => handleImageError(e, photo.id)}
+                          onLoad={() => handleImageLoad(photo)}
+                          loading="lazy"
+                        />
+                      </div>
+                      {/* Instrucción de arrastrar */}
+                      {!snapshot.isDragging && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 hover:bg-opacity-30 transition-all">
+                          <span className="text-white text-xs font-medium opacity-0 hover:opacity-100 pointer-events-none">
+                            Arrastra para añadir
+                          </span>
+                        </div>
+                      )}
+                      <div className="photo-caption">
+                        {photo.caption || `Foto ${index + 1}`}
+                      </div>
+                    </div>
+                    <p className="text-xs p-2 truncate">{photo.caption || `Foto ${index + 1}`}</p>
+                  </div>
+                )}
+              </Draggable>
+            ))}
+            {provided.placeholder}
           </div>
-        ))}
-      </div>
+        )}
+      </Droppable>
     </div>
   );
 };

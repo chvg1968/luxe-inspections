@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+// Importar script para manejar transformaciones de arrastre
+import './components/dragTransform.js';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import InspectionContainer from './components/InspectionContainer';
@@ -200,14 +202,65 @@ function App() {
       // Si la fuente es la galería de fotos
       if (source.droppableId === 'photo-gallery') {
         // Determinar el destino (sección o subsección)
-        const [destType, destId, parentId] = destination.droppableId.split('-');
+        const droppableIdParts = destination.droppableId.split('-');
+        console.log('droppableIdParts:', droppableIdParts);
         
-        if (destType === 'section') {
-          // Añadir foto a la sección usando la función manual
-          handleAddPhotoToSection(draggableId, destId);
-        } else if (destType === 'subsection' && parentId) {
-          // Añadir foto a la subsección usando la función manual
-          handleAddPhotoToSubsection(draggableId, parentId, destId);
+        // El formato correcto es 'section-{id}' o 'subsection-{id}-{parentId}'
+        if (droppableIdParts[0] === 'section' && droppableIdParts.length >= 2) {
+          // Extraer el ID real de la sección (todo después de 'section-')
+          const sectionId = droppableIdParts.slice(1).join('-');
+          console.log('Agregando foto a sección con ID:', sectionId);
+          
+          // Verificar si la sección existe antes de intentar añadir la foto
+          const sectionExists = inspection.sections.some(s => s.id === sectionId);
+          if (sectionExists) {
+            // Añadir foto a la sección usando la función manual
+            handleAddPhotoToSection(draggableId, sectionId);
+          } else {
+            console.error('Error: Sección no encontrada. ID:', sectionId);
+          }
+        } else if (droppableIdParts[0] === 'subsection') {
+          // Para subsecciones con IDs complejos, necesitamos un enfoque diferente
+          // Buscar la subsección en todas las secciones
+          let foundSubsection = false;
+          let parentSectionId = '';
+          let subsectionId = '';
+          
+          // Primero intentamos el formato estándar 'subsection-{subsectionId}-{parentSectionId}'
+          if (droppableIdParts.length >= 3) {
+            subsectionId = droppableIdParts[1];
+            parentSectionId = droppableIdParts[2];
+            
+            // Verificar si la sección padre existe
+            const parentSection = inspection.sections.find(s => s.id === parentSectionId);
+            if (parentSection) {
+              // Verificar si la subsección existe en esta sección
+              foundSubsection = parentSection.subsections.some(sub => sub.id === subsectionId);
+            }
+          }
+          
+          // Si no se encontró con el formato estándar, buscar en todas las secciones
+          if (!foundSubsection) {
+            // Extraer el ID de la subsección (segundo elemento)
+            subsectionId = droppableIdParts[1];
+            
+            // Buscar la subsección en todas las secciones
+            for (const section of inspection.sections) {
+              const subsection = section.subsections.find(sub => sub.id === subsectionId);
+              if (subsection) {
+                parentSectionId = section.id;
+                foundSubsection = true;
+                break;
+              }
+            }
+          }
+          
+          if (foundSubsection) {
+            console.log('Agregando foto a subsección:', subsectionId, 'de sección:', parentSectionId);
+            handleAddPhotoToSubsection(draggableId, parentSectionId, subsectionId);
+          } else {
+            console.error('Error: Subsección no encontrada. ID:', subsectionId);
+          }
         }
       }
     }
@@ -531,8 +584,6 @@ function App() {
             selectedSectionId={selectedSectionId}
             onAddSection={handleAddSection}
             galleryPhotos={galleryPhotos}
-            onAddPhotoToSection={handleAddPhotoToSection}
-            onAddPhotoToSubsection={handleAddPhotoToSubsection}
           />
           <div className="flex-1 ml-0 md:ml-64" style={{ overflowY: 'auto', overflowX: 'visible' }}>
             <InspectionContainer 

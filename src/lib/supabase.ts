@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { PhotoItem } from '../types';
+import { Inspection } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -46,6 +47,20 @@ export const getSession = async () => {
  */
 export const listPhotos = async (villaPath: string, sectionPath?: string) => {
   try {
+    // Diagnóstico: Listar el contenido raíz del bucket para ver qué carpetas existen
+    console.log('Listando contenido raíz del bucket photos...');
+    const { data: rootData, error: rootError } = await supabase.storage
+      .from('photos')
+      .list('', {
+        sortBy: { column: 'name', order: 'asc' }
+      });
+    
+    if (rootError) {
+      console.error('Error al listar el contenido raíz:', rootError);
+    } else {
+      console.log('Contenido raíz del bucket:', rootData);
+    }
+    
     // Construir la ruta de búsqueda
     let searchPath = villaPath;
     if (sectionPath) {
@@ -68,6 +83,24 @@ export const listPhotos = async (villaPath: string, sectionPath?: string) => {
     
     if (!data || data.length === 0) {
       console.log('No se encontraron fotos en la ruta:', searchPath);
+      
+      // Intentar con una ruta alternativa: búsqueda sin normalizar
+      console.log('Intentando con ruta alternativa: "Villa Palacio"');
+      const { data: altData, error: altError } = await supabase.storage
+        .from('photos')
+        .list('Villa Palacio', {
+          sortBy: { column: 'name', order: 'asc' }
+        });
+        
+      if (altError) {
+        console.error('Error en ruta alternativa:', altError);
+      } else if (altData && altData.length > 0) {
+        console.log('Fotos encontradas en ruta alternativa:', altData.length);
+        return altData;
+      } else {
+        console.log('No se encontraron fotos en ruta alternativa');
+      }
+      
       return [];
     }
     
@@ -155,195 +188,323 @@ export const deletePhoto = async (path: string) => {
 };
 
 /**
- * Carga fotos para una villa específica usando un enfoque directo
+ * Carga todas las fotos disponibles para una villa específica
  * @param villaPath Nombre de la villa (ej: 'Villa Palacio')
- * @returns Array de objetos PhotoItem con las fotos encontradas
+ * @returns Array de objetos PhotoItem con todas las fotos encontradas
  */
 export const loadSequentialPhotos = async (
   villaPath: string
 ): Promise<PhotoItem[]> => {
-  // Normalizar el nombre de la villa (quitar espacios y convertir a minúsculas)
-  const normalizedVillaName = villaPath.toLowerCase().replace(/\s+/g, '');
-  
-  console.log(`Intentando cargar fotos para villa: ${villaPath} (${normalizedVillaName})`);
-  
-  // Usar la URL exacta que sabemos que funciona
-  const baseUrl = `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/${normalizedVillaName}`;
-  console.log(`URL base para fotos: ${baseUrl}`);
-  
-  // Generar URLs para las fotos (hasta 30 fotos)
-  const photoUrls = [];
-  
-  // Fotos numeradas (Foto 1.jpg, Foto 2.jpg, etc.)
-  for (let i = 1; i <= 30; i++) {
-    photoUrls.push({
-      url: `${baseUrl}/Foto%20${i}.jpg`,
-      caption: `Foto ${i}`
-    });
+  try {
+    console.log(`Cargando fotos para: ${villaPath}`);
+    
+    // Primero, vamos a listar el contenido raíz del bucket para depurar
+    console.log('DEPURACIÓN: Listando contenido raíz del bucket photos...');
+    const rootCheck = await supabase.storage
+      .from('photos')
+      .list('');
+      
+    if (rootCheck.error) {
+      console.error('Error al listar contenido raíz:', rootCheck.error);
+    } else {
+      console.log('Contenido raíz del bucket:', rootCheck.data);
+      // Mostrar cada carpeta/archivo encontrado
+      rootCheck.data?.forEach(item => {
+        console.log(`- ${item.name} (${item.id}) [${item.metadata?.mimetype || 'carpeta'}]`);
+      });
+    }
+    
+    // Intentar cargar fotos directamente con URLs conocidas
+    console.log('Intentando cargar fotos directamente con URLs conocidas...');
+    const directPhotos = await loadPhotosDirectly();
+    
+    if (directPhotos.length > 0) {
+      console.log(`Éxito! Cargadas ${directPhotos.length} fotos directamente`);
+      return directPhotos;
+    }
+    
+    // Si la carga directa no funciona, intentamos con las estrategias anteriores
+    
+    // 1. Intentar con el nombre normalizado de la villa
+    const normalizedVillaName = 'villapalacio'; // Nombre fijo para pruebas
+    console.log(`Estrategia 1: Buscando en carpeta '${normalizedVillaName}'`);
+    
+    const strategy1 = await supabase.storage
+      .from('photos')
+      .list(normalizedVillaName);
+      
+    if (!strategy1.error && strategy1.data && strategy1.data.length > 0) {
+      console.log(`Éxito! Encontrados ${strategy1.data.length} archivos en '${normalizedVillaName}'`);
+      return processFiles(strategy1.data, normalizedVillaName);
+    }
+    
+    // 2. Intentar directamente en la raíz
+    console.log(`Estrategia 2: Buscando en la raíz del bucket`);
+    
+    if (rootCheck.data && rootCheck.data.length > 0) {
+      // Filtrar solo archivos (no carpetas) en la raíz
+      const rootFiles = rootCheck.data.filter(item => item.metadata?.mimetype);
+      
+      if (rootFiles.length > 0) {
+        console.log(`Éxito! Encontrados ${rootFiles.length} archivos en la raíz`);
+        return processFiles(rootFiles, '');
+      }
+      
+      // 3. Buscar en cada carpeta del nivel raíz
+      console.log(`Estrategia 3: Buscando en cada subcarpeta`);
+      
+      // Filtrar solo carpetas
+      const folders = rootCheck.data.filter(item => !item.metadata?.mimetype);
+      
+      for (const folder of folders) {
+        console.log(`Explorando carpeta: ${folder.name}`);
+        
+        const folderContents = await supabase.storage
+          .from('photos')
+          .list(folder.name);
+          
+        if (!folderContents.error && folderContents.data && folderContents.data.length > 0) {
+          // Filtrar solo imágenes
+          const folderImageFiles = folderContents.data.filter(file => 
+            file.metadata?.mimetype?.startsWith('image/') ||
+            /\.(jpe?g|png|gif|webp|tiff?)$/i.test(file.name)
+          );
+          
+          if (folderImageFiles.length > 0) {
+            console.log(`Éxito! Encontrados ${folderImageFiles.length} imágenes en '${folder.name}'`);
+            return processFiles(folderImageFiles, folder.name);
+          }
+        }
+      }
+    }
+    
+    console.warn('No se encontraron imágenes en ninguna ubicación del bucket');
+    return [];
+  } catch (error) {
+    console.error('Error al cargar fotos:', error);
+    return [];
   }
-  
-  // Crear manualmente las fotos que sabemos que existen
-  const manualPhotos: PhotoItem[] = [
-    // Fotos que sabemos que existen (basado en la URL que compartiste)
-    {
-      id: `photo-1`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%201.jpg`,
-      caption: 'Foto 1'
-    },
-    {
-      id: `photo-2`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%202.jpg`,
-      caption: 'Foto 2'
-    },
-    {
-      id: `photo-3`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%203.jpg`,
-      caption: 'Foto 3'
-    },
-    {
-      id: `photo-4`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%204.jpg`,
-      caption: 'Foto 4'
-    },
-    {
-      id: `photo-5`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%205.jpg`,
-      caption: 'Foto 5'
-    },
-    {
-      id: `photo-6`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%206.jpg`,
-      caption: 'Foto 6'
-    },
-    {
-      id: `photo-7`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%207.jpg`,
-      caption: 'Foto 7'
-    },
-    {
-      id: `photo-8`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%208.jpg`,
-      caption: 'Foto 8'
-    },
-    {
-      id: `photo-9`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%209.jpg`,
-      caption: 'Foto 9'
-    },
-    {
-      id: `photo-10`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2010.jpg`,
-      caption: 'Foto 10'
-    },
-    {
-      id: `photo-11`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2011.jpg`,
-      caption: 'Foto 11'
-    },
-    {
-      id: `photo-12`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2012.jpg`,
-      caption: 'Foto 12'
-    },
-    {
-      id: `photo-13`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2013.jpg`,
-      caption: 'Foto 13'
-    },
-    {
-      id: `photo-14`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2014.jpg`,
-      caption: 'Foto 14'
-    },
-    {
-      id: `photo-15`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2015.jpg`,
-      caption: 'Foto 15'
-    },
-    {
-      id: `photo-16`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2016.jpg`,
-      caption: 'Foto 16'
-    },
-    {
-      id: `photo-17`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2017.jpg`,
-      caption: 'Foto 17'
-    },
-    {
-      id: `photo-18`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2018.jpg`,
-      caption: 'Foto 18'
-    },
-    {
-      id: `photo-19`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2019.jpg`,
-      caption: 'Foto 19'
-    },
-    {
-      id: `photo-20`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2020.jpg`,
-      caption: 'Foto 20'
-    },
-    {
-      id: `photo-21`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2021.jpg`,
-      caption: 'Foto 21'
-    },
-    {
-      id: `photo-22`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2022.jpg`,
-      caption: 'Foto 22'
-    },
-    {
-      id: `photo-23`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2023.jpg`,
-      caption: 'Foto 23'
-    },
-    {
-      id: `photo-24`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2024.jpg`,
-      caption: 'Foto 24'
-    },
-    {
-      id: `photo-25`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2025.jpg`,
-      caption: 'Foto 25'
-    },
-    {
-      id: `photo-26`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2026.jpg`,
-      caption: 'Foto 26'
-    },
-    {
-      id: `photo-27`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2027.jpg`,
-      caption: 'Foto 27'
-    },
-    {
-      id: `photo-28`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2028.jpg`,
-      caption: 'Foto 28'
-    },
-    {
-      id: `photo-29`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2029.jpg`,
-      caption: 'Foto 29'
-    },
-    {
-      id: `photo-30`,
-      url: `https://rxudgxowradykfqfwhkp.supabase.co/storage/v1/object/public/photos/villapalacio/Foto%2030.jpg`,
-      caption: 'Foto 30'
-    },
-  ];
-  
-  console.log(`Cargando ${manualPhotos.length} fotos predefinidas`);
-  return manualPhotos;
 };
 
-// Ya no necesitamos esta función porque ahora usamos list() para obtener los archivos disponibles
+/**
+ * Carga fotos directamente usando la API REST de Supabase
+ * @returns Array de objetos PhotoItem con las fotos encontradas
+ */
+interface SupabaseFileObject {
+  name: string;
+  id: string | null; // Can be null for placeholders
+  updated_at: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  metadata: Record<string, unknown> | null;
+}
 
-import { Inspection } from '../types';
+const bucketName = 'photos';
+
+async function loadPhotosDirectly(): Promise<PhotoItem[]> {
+  const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  // Construct the URL for the Supabase Storage API to list objects
+  // Note: Using limit=1000 as a starting point, adjust if more files are expected or implement pagination
+  const prefix = 'villapalacio'; // Define prefix used in API URL
+  const apiUrl = `${baseUrl}/storage/v1/object/list/${bucketName}?prefix=${prefix}&limit=1000`; // Simplified URL, removed 'search'
+  console.log(`Attempting to list photos from API: ${apiUrl}`);
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
+        // 'Content-Type': 'application/json' // Not typically needed for GET list operations
+      }
+    });
+
+    console.log(`Supabase list API response status: ${response.status}`);
+
+    if (!response.ok) {
+      // Log more details on failure
+      const errorText = await response.text();
+      console.error(`Error fetching photo list from Supabase API: ${response.status} ${response.statusText}`);
+      console.error(`Response body: ${errorText}`);
+      // Fallback to pattern matching if the API call fails
+      console.warn('Supabase API list failed, falling back to pattern matching...');
+      return await loadPhotosWithPatternMatching();
+    }
+
+    const data: SupabaseFileObject[] = await response.json();
+
+    // Filter out potential placeholder objects sometimes included by Supabase
+    const actualPhotos = data.filter(item => item.name !== '.emptyFolderPlaceholder' && item.id !== null);
+
+    console.log(`Found ${actualPhotos.length} potential photos via API.`);
+
+    if (actualPhotos.length === 0) {
+      console.warn('Supabase API returned empty list or only placeholders, falling back to pattern matching...');
+      return await loadPhotosWithPatternMatching();
+    }
+
+    // Map the data to the Photo interface
+    const photos: PhotoItem[] = actualPhotos.map(file => {
+      const publicUrl = `${baseUrl}/storage/v1/object/public/${bucketName}/${prefix}/${file.name}`;
+      // Extract caption from filename, removing extension
+      const caption = file.name.split('/').pop()?.replace(/\.[^/.]+$/, '') || file.name;
+      return {
+        id: file.id || `photo-${Math.random().toString(36).substring(2, 10)}`, // Use Supabase ID or generate one
+        name: file.name,
+        url: publicUrl,
+        caption: caption
+      };
+    });
+
+    console.log(`Successfully loaded ${photos.length} photos using Supabase API.`);
+    return photos;
+
+  } catch (error) {
+    console.error('Network error or other issue fetching photo list:', error);
+    // Fallback to pattern matching on network errors too
+    console.warn('Network error during API list, falling back to pattern matching...');
+    return await loadPhotosWithPatternMatching();
+  }
+};
+
+/**
+ * Carga fotos usando un patrón de numeración secuencial
+ * @returns Array de objetos PhotoItem
+ */
+async function loadPhotosWithPatternMatching(): Promise<PhotoItem[]> {
+  console.log(`Starting pattern matching fallback for prefix: villapalacio`);
+  const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const foundPhotos: PhotoItem[] = []; // Explicitly type the array
+  const patterns: { path: string; name: string }[] = [];
+
+  // --- Generate patterns ---
+  // Example: Foto 1.jpg, Foto 2.jpg, etc.
+  for (let i = 1; i <= 100; i++) {
+    const name = `Foto ${i}.jpg`;
+    // Ensure the path part is properly encoded for the URL
+    const path = `${encodeURIComponent('villapalacio')}/${encodeURIComponent(name)}`;
+    patterns.push({ path, name });
+  }
+  // Add other patterns if needed (e.g., IMG_0001.JPG)
+  // patterns.push(...);
+
+  console.log(`Generated ${patterns.length} patterns to check.`);
+
+  // --- Check patterns in batches ---
+  for (let i = 0; i < patterns.length; i += 10) {
+    const batch = patterns.slice(i, i + 10);
+    console.log(`Checking batch ${Math.floor(i / 10) + 1}/${Math.ceil(patterns.length / 10)}`);
+
+    const promises = batch.map(async (pattern) => {
+      // Construct the full URL for the HEAD request
+      const checkUrl = `${baseUrl}/storage/v1/object/public/${bucketName}/${pattern.path}`;
+      try {
+        const response = await fetch(checkUrl, { method: 'HEAD' });
+        // If HEAD request is successful (status 2xx), the file exists
+        if (response.ok) {
+          return {
+            id: `pattern-photo-${pattern.name}-${Math.random().toString(36).substring(2, 9)}`, // Generate unique ID
+            name: pattern.name,
+            url: checkUrl, // Use the same URL for display
+            caption: pattern.name.replace(/\.[^/.]+$/, '') // Extract caption
+          };
+        } else {
+          // Log non-200 status briefly but don't treat as error
+          // console.log(`HEAD request for ${pattern.name} failed with status: ${response.status}`);
+          return null; // Indicate file not found
+        }
+      } catch (error) {
+        // Log network errors but don't stop the process
+        console.warn(`Network error checking ${pattern.name}:`, error instanceof Error ? error.message : String(error));
+        return null; // Indicate file check failed
+      }
+    });
+
+    // Use Promise.allSettled to wait for all checks in the batch, even if some fail
+    const results = await Promise.allSettled(promises);
+
+    results.forEach(result => {
+      // Check if the promise was fulfilled and the result is not null
+      if (result.status === 'fulfilled' && result.value) {
+        // Ensure the pushed object conforms to PhotoItem
+        const photoItem: PhotoItem = result.value; 
+        foundPhotos.push(photoItem);
+      }
+      // Optional: Log rejections if needed for debugging
+      // else if (result.status === 'rejected') {
+      //   console.error('Promise rejected during HEAD request:', result.reason);
+      // }
+    });
+
+    console.log(`Current found photos after batch: ${foundPhotos.length}`);
+
+    // Optional: Stop early if a reasonable number of photos are found
+    // if (foundPhotos.length >= 30) { // Adjust threshold as needed
+    //   console.log('Found enough photos, stopping pattern matching early...');
+    //   break;
+    // }
+  }
+
+  console.log(`Pattern matching finished. Found ${foundPhotos.length} photos.`);
+  return foundPhotos;
+};
+
+/**
+ * Tipo para representar un archivo en el bucket de Supabase
+ */
+interface StorageFile {
+  id: string;
+  name: string;
+  metadata?: {
+    mimetype?: string;
+    size?: number;
+  };
+}
+
+/**
+ * Procesa los archivos encontrados y los convierte en objetos PhotoItem
+ * @param files Archivos encontrados en el bucket
+ * @param folderPath Ruta de la carpeta donde se encontraron
+ * @returns Array de objetos PhotoItem
+ */
+const processFiles = (files: StorageFile[], folderPath: string): PhotoItem[] => {
+  // Filtrar solo imágenes por extensión o tipo MIME
+  const imageFiles = files.filter(file => 
+    (file.metadata?.mimetype?.startsWith('image/')) ||
+    /\.(jpe?g|png|gif|webp|tiff?)$/i.test(file.name)
+  );
+  
+  console.log(`Procesando ${imageFiles.length} imágenes de ${files.length} archivos`);
+  
+  if (imageFiles.length === 0) {
+    return [];
+  }
+  
+  // Crear objetos PhotoItem para cada imagen encontrada
+  const photos: PhotoItem[] = [];
+  
+  for (const file of imageFiles) {
+    // Crear URL pública para el archivo
+    const { data } = supabase.storage
+      .from('photos')
+      .getPublicUrl(`${folderPath ? folderPath + '/' : ''}${file.name}`);
+    
+    if (data?.publicUrl) {
+      // Usar el nombre del archivo como caption (sin extensión)
+      const caption = file.name.replace(/\.[^/.]+$/, '');
+      
+      photos.push({
+        id: `photo-${file.id || Math.random().toString(36).substring(2, 10)}`,
+        url: data.publicUrl,
+        caption: caption
+      });
+    }
+  }
+  
+  console.log(`Generados ${photos.length} objetos PhotoItem`);
+  return photos;
+};
 
 /**
  * Guarda la estructura completa de una inspección
@@ -360,64 +521,58 @@ export const saveInspection = async (inspectionId: string, inspectionData: Inspe
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }));
+    
     console.log('Inspección guardada en localStorage:', inspectionId);
-  } catch (localStorageError) {
-    console.error('Error al guardar en localStorage:', localStorageError);
-  }
-  
-  // Luego intentamos guardar en Supabase
-  try {
-    console.log('Intentando guardar inspección en Supabase:', inspectionId);
     
-    // Verificar si ya existe la inspección
-    const { data: existingData, error: checkError } = await supabase
-      .from('luxe_inspections')
-      .select('id')
-      .eq('id', inspectionId)
-      .maybeSingle();
-    
-    if (checkError) {
-      console.error('Error al verificar si existe la inspección:', checkError);
-      return { success: true, source: 'localStorage', error: checkError };
-    }
-    
-    if (existingData) {
-      // Si existe, actualizamos
-      console.log('Actualizando inspección existente en Supabase:', inspectionId);
-      const { data, error } = await supabase
-        .from('luxe_inspections')
-        .update({ 
-          data: inspectionData,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', inspectionId);
+    // Intentamos guardar en Supabase también
+    try {
+      console.log('Intentando guardar en Supabase:', inspectionId);
       
-      if (error) {
-        console.error('Error al actualizar inspección en Supabase:', error);
-        return { success: true, source: 'localStorage', error };
+      // Verificar si ya existe la inspección
+      const { data: existingData, error: checkError } = await supabase
+        .from('luxe_inspections')
+        .select('id')
+        .eq('id', inspectionId)
+        .maybeSingle();
+      
+      if (checkError) {
+        console.error('Error al verificar existencia en Supabase:', checkError);
+        return { success: true, source: 'localStorage', error: checkError };
       }
       
-      return { success: true, source: 'supabase', data };
-    } else {
-      // Si no existe, insertamos
-      console.log('Insertando nueva inspección en Supabase:', inspectionId);
-      const { data, error } = await supabase
-        .from('luxe_inspections')
-        .insert([
-          { 
+      let result;
+      
+      if (existingData) {
+        // Actualizar inspección existente
+        result = await supabase
+          .from('luxe_inspections')
+          .update({
+            data: inspectionData,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', inspectionId);
+      } else {
+        // Crear nueva inspección
+        result = await supabase
+          .from('luxe_inspections')
+          .insert({
             id: inspectionId,
             data: inspectionData,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
-          }
-        ]);
-      
-      if (error) {
-        console.error('Error al insertar inspección en Supabase:', error);
-        return { success: true, source: 'localStorage', error };
+          });
       }
       
-      return { success: true, source: 'supabase', data };
+      if (result.error) {
+        console.error('Error al guardar en Supabase:', result.error);
+        return { success: true, source: 'localStorage', error: result.error };
+      }
+      
+      console.log('Inspección guardada en Supabase:', inspectionId);
+      return { success: true, source: 'both' };
+    } catch (supabaseError) {
+      console.error('Error al conectar con Supabase:', supabaseError);
+      return { success: true, source: 'localStorage', error: supabaseError };
     }
   } catch (error) {
     console.error('Error general al guardar la inspección en Supabase:', error);

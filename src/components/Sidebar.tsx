@@ -3,7 +3,6 @@ import { Inspection, Section, PhotoItem } from '../types';
 import { ChevronRight, Home, GripVertical, Plus, Image } from 'lucide-react';
 import { Droppable, Draggable } from '@hello-pangea/dnd';
 import PhotoGallery from './PhotoGallery';
-import PhotoSelector from './PhotoSelector';
 
 interface SidebarProps {
   inspection: Inspection;
@@ -12,8 +11,6 @@ interface SidebarProps {
   selectedSectionId: string;
   onAddSection: () => void;
   galleryPhotos?: PhotoItem[];
-  onAddPhotoToSection?: (photoId: string, sectionId: string) => void;
-  onAddPhotoToSubsection?: (photoId: string, sectionId: string, subsectionId: string) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
@@ -22,9 +19,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onSectionSelect, 
   selectedSectionId,
   onAddSection,
-  galleryPhotos = [],
-  onAddPhotoToSection,
-  onAddPhotoToSubsection
+  galleryPhotos = []
 }) => {
   const [showPhotoGallery, setShowPhotoGallery] = useState(false);
   const calculateProgress = (section: Section): number => {
@@ -170,14 +165,6 @@ const Sidebar: React.FC<SidebarProps> = ({
             {/* Galería de fotos */}
             {showPhotoGallery && (
               <div className="mt-4" style={{ overflow: 'visible' }}>
-                {onAddPhotoToSection && onAddPhotoToSubsection && (
-                  <PhotoSelector 
-                    photos={galleryPhotos}
-                    sections={inspection.sections}
-                    onAddPhotoToSection={onAddPhotoToSection}
-                    onAddPhotoToSubsection={onAddPhotoToSubsection}
-                  />
-                )}
                 <PhotoGallery 
                   villaName={inspection.property || 'Villa Palacio'} 
                   photos={galleryPhotos}
