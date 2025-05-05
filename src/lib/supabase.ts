@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { PhotoItem } from '../types';
-import { Inspection } from '../types';
+import { PhotoItem, Inspection } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -290,81 +289,63 @@ export const loadSequentialPhotos = async (
  * Carga fotos directamente usando la API REST de Supabase
  * @returns Array de objetos PhotoItem con las fotos encontradas
  */
-interface SupabaseFileObject {
-  name: string;
-  id: string | null; // Can be null for placeholders
-  updated_at: string | null;
-  created_at: string | null;
-  last_accessed_at: string | null;
-  metadata: Record<string, unknown> | null;
-}
-
 const bucketName = 'photos';
 
 async function loadPhotosDirectly(): Promise<PhotoItem[]> {
-  const baseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  // Construct the URL for the Supabase Storage API to list objects
-  // Note: Using limit=1000 as a starting point, adjust if more files are expected or implement pagination
   const prefix = 'villapalacio'; // Define prefix used in API URL
-  const apiUrl = `${baseUrl}/storage/v1/object/list/${bucketName}?prefix=${prefix}&limit=1000`; // Simplified URL, removed 'search'
-  console.log(`Attempting to list photos from API: ${apiUrl}`);
+  console.log(`Attempting to list photos using supabase-js client for prefix: ${prefix}`);
 
   try {
-    const response = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-        // 'Content-Type': 'application/json' // Not typically needed for GET list operations
-      }
-    });
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .list(prefix, {
+        limit: 1000, // Corresponds to the previous limit parameter
+        offset: 0,
+        // sortBy: { column: 'name', order: 'asc' }, // Optional sorting
+      });
 
-    console.log(`Supabase list API response status: ${response.status}`);
-
-    if (!response.ok) {
-      // Log more details on failure
-      const errorText = await response.text();
-      console.error(`Error fetching photo list from Supabase API: ${response.status} ${response.statusText}`);
-      console.error(`Response body: ${errorText}`);
-      // Fallback to pattern matching if the API call fails
-      console.warn('Supabase API list failed, falling back to pattern matching...');
-      return await loadPhotosWithPatternMatching();
+    if (error) {
+      console.error('Error listing files using supabase-js:', error);
+      throw error;
     }
 
-    const data: SupabaseFileObject[] = await response.json();
-
-    // Filter out potential placeholder objects sometimes included by Supabase
-    const actualPhotos = data.filter(item => item.name !== '.emptyFolderPlaceholder' && item.id !== null);
-
-    console.log(`Found ${actualPhotos.length} potential photos via API.`);
-
-    if (actualPhotos.length === 0) {
-      console.warn('Supabase API returned empty list or only placeholders, falling back to pattern matching...');
-      return await loadPhotosWithPatternMatching();
+    if (!data) {
+       console.warn('Supabase storage list returned null data, returning empty array.');
+       return [];
     }
 
-    // Map the data to the Photo interface
-    const photos: PhotoItem[] = actualPhotos.map(file => {
-      const publicUrl = `${baseUrl}/storage/v1/object/public/${bucketName}/${prefix}/${file.name}`;
-      // Extract caption from filename, removing extension
-      const caption = file.name.split('/').pop()?.replace(/\.[^/.]+$/, '') || file.name;
-      return {
-        id: file.id || `photo-${Math.random().toString(36).substring(2, 10)}`, // Use Supabase ID or generate one
-        name: file.name,
-        url: publicUrl,
-        caption: caption
-      };
-    });
+    console.log(`Successfully listed ${data.length} files/folders from Supabase Storage.`);
 
-    console.log(`Successfully loaded ${photos.length} photos using Supabase API.`);
-    return photos;
+    const photoItems = data
+      // Filter out potential placeholder files/folders if Supabase includes them
+      .filter(file => file.id !== null && file.name !== '.emptyFolderPlaceholder') 
+      .map(file => {
+        // Construct the public URL. Assumes the bucket is public or has appropriate policies.
+        const { data: publicUrlData } = supabase.storage.from(bucketName).getPublicUrl(`${prefix}/${file.name}`);
+        
+        // Basic check if publicUrl is available
+        if (!publicUrlData || !publicUrlData.publicUrl) {
+          console.warn(`Could not get public URL for ${file.name}`);
+          // Decide how to handle missing URLs: return null/undefined and filter later, or use a placeholder
+          return null; // Indicate failure to get URL
+        }
 
-  } catch (error) {
-    console.error('Network error or other issue fetching photo list:', error);
-    // Fallback to pattern matching on network errors too
-    console.warn('Network error during API list, falling back to pattern matching...');
-    return await loadPhotosWithPatternMatching();
+        return {
+          id: file.id ?? file.name, // Use name as fallback ID if id is null
+          name: file.name,
+          url: publicUrlData.publicUrl,
+          caption: file.name // Default caption, can be customized later
+        };
+      })
+      .filter((item): item is PhotoItem => item !== null); // Filter out any nulls from URL failures
+
+    console.log(`Mapped ${photoItems.length} files to PhotoItem objects.`);
+    return photoItems;
+
+  } catch (err) {
+    console.error('Supabase API list failed, falling back to pattern matching...', err);
+    // Fallback to pattern matching
+    return loadPhotosWithPatternMatching(prefix);
   }
 };
 
@@ -372,8 +353,8 @@ async function loadPhotosDirectly(): Promise<PhotoItem[]> {
  * Carga fotos usando un patrón de numeración secuencial
  * @returns Array de objetos PhotoItem
  */
-async function loadPhotosWithPatternMatching(): Promise<PhotoItem[]> {
-  console.log(`Starting pattern matching fallback for prefix: villapalacio`);
+async function loadPhotosWithPatternMatching(prefix: string): Promise<PhotoItem[]> {
+  console.log(`Starting pattern matching fallback for prefix: ${prefix}`);
   const baseUrl = import.meta.env.VITE_SUPABASE_URL;
   const foundPhotos: PhotoItem[] = []; // Explicitly type the array
   const patterns: { path: string; name: string }[] = [];
@@ -451,24 +432,12 @@ async function loadPhotosWithPatternMatching(): Promise<PhotoItem[]> {
 };
 
 /**
- * Tipo para representar un archivo en el bucket de Supabase
- */
-interface StorageFile {
-  id: string;
-  name: string;
-  metadata?: {
-    mimetype?: string;
-    size?: number;
-  };
-}
-
-/**
  * Procesa los archivos encontrados y los convierte en objetos PhotoItem
  * @param files Archivos encontrados en el bucket
  * @param folderPath Ruta de la carpeta donde se encontraron
  * @returns Array de objetos PhotoItem
  */
-const processFiles = (files: StorageFile[], folderPath: string): PhotoItem[] => {
+const processFiles = (files: any[], folderPath: string): PhotoItem[] => {
   // Filtrar solo imágenes por extensión o tipo MIME
   const imageFiles = files.filter(file => 
     (file.metadata?.mimetype?.startsWith('image/')) ||
