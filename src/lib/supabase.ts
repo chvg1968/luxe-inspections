@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { PhotoItem, Inspection } from '../types';
+import { FileObject } from '@supabase/storage-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -116,8 +117,6 @@ export const listPhotos = async (villaPath: string, sectionPath?: string) => {
         
         return {
           id: item.id,
-          name: item.name,
-          path: fullPath,
           url: publicUrl.publicUrl,
           caption: item.name.replace(/\.[^/.]+$/, '') // Quitar extensión para el caption
         };
@@ -316,9 +315,9 @@ async function loadPhotosDirectly(): Promise<PhotoItem[]> {
 
     console.log(`Successfully listed ${data.length} files/folders from Supabase Storage.`);
 
-    const photoItems = data
+    const mappedItems = data
       // Filter out potential placeholder files/folders if Supabase includes them
-      .filter(file => file.id !== null && file.name !== '.emptyFolderPlaceholder') 
+      .filter(file => file.id !== null && file.name !== '.emptyFolderPlaceholder')
       .map(file => {
         // Construct the public URL. Assumes the bucket is public or has appropriate policies.
         const { data: publicUrlData } = supabase.storage.from(bucketName).getPublicUrl(`${prefix}/${file.name}`);
@@ -330,14 +329,17 @@ async function loadPhotosDirectly(): Promise<PhotoItem[]> {
           return null; // Indicate failure to get URL
         }
 
-        return {
+        // Ensure the returned object matches the PhotoItem structure
+        const photoItem: PhotoItem = {
           id: file.id ?? file.name, // Use name as fallback ID if id is null
-          name: file.name,
           url: publicUrlData.publicUrl,
           caption: file.name // Default caption, can be customized later
         };
-      })
-      .filter((item): item is PhotoItem => item !== null); // Filter out any nulls from URL failures
+        return photoItem;
+      });
+      
+    // Filter out any nulls that occurred during URL fetching AFTER mapping
+    const photoItems: PhotoItem[] = mappedItems.filter((item): item is PhotoItem => item !== null);
 
     console.log(`Mapped ${photoItems.length} files to PhotoItem objects.`);
     return photoItems;
@@ -386,7 +388,6 @@ async function loadPhotosWithPatternMatching(prefix: string): Promise<PhotoItem[
         if (response.ok) {
           return {
             id: `pattern-photo-${pattern.name}-${Math.random().toString(36).substring(2, 9)}`, // Generate unique ID
-            name: pattern.name,
             url: checkUrl, // Use the same URL for display
             caption: pattern.name.replace(/\.[^/.]+$/, '') // Extract caption
           };
@@ -437,7 +438,7 @@ async function loadPhotosWithPatternMatching(prefix: string): Promise<PhotoItem[
  * @param folderPath Ruta de la carpeta donde se encontraron
  * @returns Array de objetos PhotoItem
  */
-const processFiles = (files: any[], folderPath: string): PhotoItem[] => {
+const processFiles = (files: FileObject[], folderPath: string): PhotoItem[] => {
   // Filtrar solo imágenes por extensión o tipo MIME
   const imageFiles = files.filter(file => 
     (file.metadata?.mimetype?.startsWith('image/')) ||
